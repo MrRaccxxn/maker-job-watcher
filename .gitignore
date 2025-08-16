@@ -1,0 +1,65 @@
+# Dependencies
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Build outputs
+dist/
+*.tgz
+*.tar.gz
+
+# Environment variables
+.env
+.env.local
+.env.production
+.env.staging
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Logs
+logs/
+*.log
+
+# Coverage reports
+coverage/
+.nyc_output/
+
+# AWS
+.aws-sam/
+samconfig.toml
+*.zip
+response.json
+
+# Serverless
+.serverless/
+
+# Testing
+.jest/
+
+# Temporary files
+*.tmp
+*.temp
+temp/
+tmp/
+
+# CloudFormation
+template.yaml.bak
+
+# Local development
+.local/
+local/

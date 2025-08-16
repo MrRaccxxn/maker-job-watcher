@@ -1,0 +1,39 @@
+{
+  "name": "maker-job-watcher",
+  "version": "1.0.0",
+  "description": "AWS Lambda function to monitor MakerDAO jobs using the Sequencer contract",
+  "main": "dist/handler.js",
+  "scripts": {
+    "build": "tsc",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage",
+    "lint": "eslint src/**/*.ts",
+    "lint:fix": "eslint src/**/*.ts --fix",
+    "clean": "rm -rf dist",
+    "prebuild": "npm run clean",
+    "package": "npm run build && zip -r function.zip dist node_modules",
+    "deploy": "serverless deploy"
+  },
+  "dependencies": {
+    "aws-sdk": "^2.1490.0",
+    "ethers": "^6.8.1",
+    "node-fetch": "^3.3.2"
+  },
+  "devDependencies": {
+    "@types/aws-lambda": "^8.10.125",
+    "@types/jest": "^29.5.8",
+    "@types/node": "^20.9.0",
+    "@typescript-eslint/eslint-plugin": "^6.11.0",
+    "@typescript-eslint/parser": "^6.11.0",
+    "eslint": "^8.54.0",
+    "jest": "^29.7.0",
+    "serverless": "^3.38.0",
+    "serverless-plugin-typescript": "^2.1.5",
+    "ts-jest": "^29.1.1",
+    "typescript": "^5.2.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
