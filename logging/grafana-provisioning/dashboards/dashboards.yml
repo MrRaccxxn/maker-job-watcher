@@ -1,0 +1,12 @@
+apiVersion: 1
+
+providers:
+  - name: 'maker-job-watcher'
+    orgId: 1
+    folder: 'MakerDAO Job Watcher'
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 10
+    allowUiUpdates: true
+    options:
+      path: /etc/grafana/provisioning/dashboards

@@ -1,0 +1,266 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: 'MakerDAO Job Watcher - Monitors MakerDAO jobs using the Sequencer contract'
+
+Parameters:
+  RpcUrl:
+    Type: String
+    Description: Ethereum RPC endpoint URL
+    NoEcho: true
+  
+  DiscordWebhookUrl:
+    Type: String
+    Description: Discord webhook URL for notifications
+    NoEcho: true
+  
+  SequencerAddress:
+    Type: String
+    Description: Address of the MakerDAO Sequencer contract
+    Default: '0x1234567890123456789012345678901234567890'
+  
+  BlocksToAnalyze:
+    Type: Number
+    Description: Number of recent blocks to analyze
+    Default: 10
+    MinValue: 1
+    MaxValue: 100
+  
+  Network:
+    Type: String
+    Description: Network identifier as bytes32 (default mainnet)
+    Default: '0x0000000000000000000000000000000000000000000000000000000000000001'
+  
+  Stage:
+    Type: String
+    Description: Deployment stage
+    Default: 'dev'
+    AllowedValues: ['dev', 'staging', 'prod']
+
+Globals:
+  Function:
+    Timeout: 30
+    MemorySize: 256
+    Runtime: nodejs18.x
+    Environment:
+      Variables:
+        NODE_ENV: production
+
+Resources:
+  JobWatcherFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub 'maker-job-watcher-${Stage}'
+      CodeUri: dist/
+      Handler: handler.handler
+      Description: 'Monitors MakerDAO jobs and sends alerts for stale workable jobs'
+      Environment:
+        Variables:
+          RPC_URL: !Ref RpcUrl
+          DISCORD_WEBHOOK_URL: !Ref DiscordWebhookUrl
+          SEQUENCER_ADDRESS: !Ref SequencerAddress
+          BLOCKS_TO_ANALYZE: !Ref BlocksToAnalyze
+          NETWORK: !Ref Network
+      Events:
+        ScheduledEvent:
+          Type: Schedule
+          Properties:
+            Schedule: 'rate(5 minutes)'
+            Description: 'Trigger job monitoring every 5 minutes'
+            Enabled: true
+      Policies:
+        - CloudWatchPutMetricPolicy: {}
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - logs:CreateLogGroup
+                - logs:CreateLogStream
+                - logs:PutLogEvents
+              Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*'
+
+  JobWatcherHttpFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub 'maker-job-watcher-http-${Stage}'
+      CodeUri: dist/
+      Handler: handler.httpHandler
+      Description: 'HTTP endpoint for manual job monitoring triggers'
+      Environment:
+        Variables:
+          RPC_URL: !Ref RpcUrl
+          DISCORD_WEBHOOK_URL: !Ref DiscordWebhookUrl
+          SEQUENCER_ADDRESS: !Ref SequencerAddress
+          BLOCKS_TO_ANALYZE: !Ref BlocksToAnalyze
+          NETWORK: !Ref Network
+      Events:
+        HttpApi:
+          Type: HttpApi
+          Properties:
+            Path: /monitor
+            Method: get
+            ApiId: !Ref JobWatcherApi
+      Policies:
+        - CloudWatchPutMetricPolicy: {}
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - logs:CreateLogGroup
+                - logs:CreateLogStream
+                - logs:PutLogEvents
+              Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*'
+
+  JobWatcherApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: !Ref Stage
+      Description: 'HTTP API for MakerDAO Job Watcher'
+      CorsConfiguration:
+        AllowOrigins:
+          - "*"
+        AllowHeaders:
+          - "*"
+        AllowMethods:
+          - GET
+          - POST
+        MaxAge: 600
+
+  # CloudWatch Alarms
+  HighStaleJobsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'MakerDAO-High-Stale-Jobs-${Stage}'
+      AlarmDescription: 'Alert when too many jobs are stale'
+      MetricName: 'JobsNotWorkedCount'
+      Namespace: 'MakerDAO/JobWatcher'
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 5
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+
+  FunctionFailuresAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'MakerDAO-Job-Watcher-Failures-${Stage}'
+      AlarmDescription: 'Alert on function failures'
+      MetricName: 'HealthCheck'
+      Namespace: 'MakerDAO/JobWatcher'
+      Statistic: Minimum
+      Period: 600
+      EvaluationPeriods: 2
+      Threshold: 1
+      ComparisonOperator: LessThanThreshold
+      TreatMissingData: breaching
+
+  HighRpcFailuresAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'MakerDAO-High-RPC-Failures-${Stage}'
+      AlarmDescription: 'Alert on high RPC failure rate'
+      MetricName: 'RpcFailures'
+      Namespace: 'MakerDAO/JobWatcher'
+      Statistic: Sum
+      Period: 900
+      EvaluationPeriods: 2
+      Threshold: 10
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+
+  # CloudWatch Dashboard
+  JobWatcherDashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: !Sub 'MakerDAO-Job-Watcher-${Stage}'
+      DashboardBody: !Sub |
+        {
+          "widgets": [
+            {
+              "type": "metric",
+              "x": 0,
+              "y": 0,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "metrics": [
+                  ["MakerDAO/JobWatcher", "JobsNotWorkedCount"],
+                  [".", "TotalJobs"],
+                  [".", "WorkableJobs"]
+                ],
+                "period": 300,
+                "stat": "Average",
+                "region": "${AWS::Region}",
+                "title": "Job Status Overview",
+                "view": "timeSeries"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 12,
+              "y": 0,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "metrics": [
+                  ["MakerDAO/JobWatcher", "ExecutionDuration"],
+                  [".", "RpcFailures"],
+                  [".", "AlertsSent"]
+                ],
+                "period": 300,
+                "stat": "Average",
+                "region": "${AWS::Region}",
+                "title": "Performance Metrics",
+                "view": "timeSeries"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 0,
+              "y": 6,
+              "width": 24,
+              "height": 6,
+              "properties": {
+                "metrics": [
+                  ["MakerDAO/JobWatcher", "HealthCheck"]
+                ],
+                "period": 300,
+                "stat": "Minimum",
+                "region": "${AWS::Region}",
+                "title": "Health Status",
+                "view": "timeSeries",
+                "yAxis": {
+                  "left": {
+                    "min": 0,
+                    "max": 1
+                  }
+                }
+              }
+            }
+          ]
+        }
+
+Outputs:
+  JobWatcherFunctionArn:
+    Description: 'ARN of the job watcher Lambda function'
+    Value: !GetAtt JobWatcherFunction.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-JobWatcherFunctionArn'
+
+  JobWatcherHttpFunctionArn:
+    Description: 'ARN of the HTTP job watcher Lambda function'
+    Value: !GetAtt JobWatcherHttpFunction.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-JobWatcherHttpFunctionArn'
+
+  ApiEndpoint:
+    Description: 'HTTP API endpoint URL'
+    Value: !Sub 'https://${JobWatcherApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}/monitor'
+    Export:
+      Name: !Sub '${AWS::StackName}-ApiEndpoint'
+
+  DashboardUrl:
+    Description: 'CloudWatch Dashboard URL'
+    Value: !Sub 'https://${AWS::Region}.console.aws.amazon.com/cloudwatch/home?region=${AWS::Region}#dashboards:name=${JobWatcherDashboard}'
+    Export:
+      Name: !Sub '${AWS::StackName}-DashboardUrl'

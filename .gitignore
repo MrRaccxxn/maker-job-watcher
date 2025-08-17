@@ -62,4 +62,14 @@ template.yaml.bak
 
 # Local development
 .local/
-local/
+local/ 
+
+# Sensitive configuration files
+**/credentials.yml
+**/secrets.yml
+promtail/promtail.production.yml
+grafana/credentials.yaml
+
+.build/
+.serverless/
+dist/

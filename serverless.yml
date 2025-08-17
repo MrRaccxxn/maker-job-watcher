@@ -1,0 +1,181 @@
+service: maker-job-watcher
+
+frameworkVersion: '3'
+
+provider:
+  name: aws
+  runtime: nodejs20.x
+  stage: ${opt:stage, 'prod'}
+  region: ${opt:region, 'us-east-1'}
+  
+  # Environment variables for production
+  environment:
+    NODE_ENV: production
+    LOG_LEVEL: INFO
+    USE_PROMTAIL: false  # Use direct HTTP to Loki for Lambda
+    
+    # Core application config
+    RPC_URL: ${env:RPC_URL}
+    SEQUENCER_ADDRESS: ${env:SEQUENCER_ADDRESS}
+    BLOCKS_TO_ANALYZE: ${env:BLOCKS_TO_ANALYZE, '10'}
+    NETWORK: ${env:NETWORK, '0x0000000000000000000000000000000000000000000000000000000000000001'}
+    DISCORD_WEBHOOK_URL: ${env:DISCORD_WEBHOOK_URL}
+    
+    # Grafana Cloud Loki for enhanced logging
+    GRAFANA_LOKI_URL: ${env:GRAFANA_LOKI_URL, ''}
+    GRAFANA_LOKI_USERNAME: ${env:GRAFANA_LOKI_USERNAME, ''}
+    GRAFANA_LOKI_TOKEN: ${env:GRAFANA_LOKI_TOKEN, ''}
+  
+  # IAM permissions for comprehensive logging
+  iamRoleStatements:
+    - Effect: Allow
+      Action:
+        - logs:CreateLogGroup
+        - logs:CreateLogStream
+        - logs:PutLogEvents
+      Resource: "arn:aws:logs:${aws:region}:${aws:accountId}:log-group:/aws/lambda/*"
+    - Effect: Allow
+      Action:
+        - cloudwatch:PutMetricData
+      Resource: '*'
+
+functions:
+  # Main job watcher function
+  jobWatcher:
+    handler: dist/handler.handler
+    name: ${self:service}-${self:provider.stage}-job-watcher
+    description: MakerDAO Job Watcher - Monitor stale workable jobs
+    timeout: 300  # 5 minutes max execution
+    memorySize: 512  # Increased for better performance
+    
+    events:
+      # Primary schedule - every 5 minutes
+      - schedule:
+          rate: rate(5 minutes)
+          description: 'Monitor MakerDAO jobs every 5 minutes'
+          enabled: true
+          input:
+            source: "aws.events"
+            detail-type: "Scheduled Event"
+      
+      # Connectivity test - every hour
+      - schedule:
+          rate: rate(1 hour)
+          description: 'Hourly connectivity and health check'
+          enabled: true
+          input:
+            source: "aws.events"
+            detail-type: "Scheduled Event"
+            test: true
+
+  # HTTP endpoint for manual testing (optional)
+  httpTrigger:
+    handler: dist/handler.httpHandler
+    name: ${self:service}-${self:provider.stage}-http
+    description: HTTP endpoint for manual testing and status checks
+    timeout: 300
+    memorySize: 256
+    events:
+      - httpApi:
+          path: /scan
+          method: get
+      - httpApi:
+          path: /test
+          method: get
+      - httpApi:
+          path: /status
+          method: get
+
+# CloudWatch resources for log management
+resources:
+  Resources:
+    # Log groups with retention policies
+    JobWatcherLogGroup:
+      Type: AWS::Logs::LogGroup
+      Properties:
+        LogGroupName: /aws/lambda/${self:service}-${self:provider.stage}-job-watcher
+        RetentionInDays: 30
+    
+    HttpTriggerLogGroup:
+      Type: AWS::Logs::LogGroup
+      Properties:
+        LogGroupName: /aws/lambda/${self:service}-${self:provider.stage}-http
+        RetentionInDays: 14
+    
+    # EventBridge rule with detailed configuration
+    JobWatcherScheduleRule:
+      Type: AWS::Events::Rule
+      Properties:
+        Name: ${self:service}-${self:provider.stage}-schedule
+        Description: Trigger MakerDAO job watcher every 5 minutes
+        ScheduleExpression: rate(5 minutes)
+        State: ENABLED
+        Targets:
+          - Arn: 
+              Fn::GetAtt:
+                - JobWatcherLambdaFunction
+                - Arn
+            Id: JobWatcherTarget
+            Input: |
+              {
+                "source": "aws.events",
+                "detail-type": "Scheduled Event",
+                "detail": {
+                  "triggered-by": "eventbridge-schedule"
+                }
+              }
+
+# Optimized packaging for Lambda
+package:
+  patterns:
+    - '!**'
+    - 'dist/**'
+    - 'node_modules/**'
+    - '!node_modules/aws-sdk/**'  # Exclude AWS SDK v2
+    - '!src/**'
+    - '!tests/**'
+    - '!logs/**'
+    - '!promtail/**'
+    - '!logging/**'
+    - '!*.md'
+    - '!docker-compose*.yml'
+    - '!serverless*.yml'
+  excludeDevDependencies: true
+
+# Required plugins
+plugins: []
+
+# Custom configuration
+custom:
+  # TypeScript compilation
+  typescript:
+    typescript:
+      configFilePath: './tsconfig.json'
+  
+  # Offline testing
+  serverless-offline:
+    httpPort: 3001
+    lambdaPort: 3002
+
+# Stack outputs for reference
+outputs:
+  JobWatcherFunctionName:
+    Description: "Name of the Job Watcher Lambda function"
+    Value: 
+      Ref: JobWatcherLambdaFunction
+    Export:
+      Name: ${self:service}-${self:provider.stage}-function-name
+  
+  HttpApiEndpoint:
+    Description: "HTTP API endpoint for manual testing"
+    Value: 
+      Fn::Sub: "https://${ServerlessHttpApi}.execute-api.${AWS::Region}.amazonaws.com"
+    Export:
+      Name: ${self:service}-${self:provider.stage}-http-endpoint
+  
+  CloudWatchLogGroups:
+    Description: "CloudWatch Log Groups"
+    Value: 
+      Fn::Sub: "/aws/lambda/${self:service}-${self:provider.stage}-*"
+    Export:
+      Name: ${self:service}-${self:provider.stage}-log-groups

@@ -1,0 +1,21 @@
+services:
+  promtail:
+    image: grafana/promtail:latest
+    container_name: maker-job-watcher-promtail
+    ports:
+      - "9080:9080"
+    volumes:
+      - ./promtail.yml:/etc/promtail/config.yml:ro
+      - ../logs:/var/log/maker-job-watcher:ro
+      - promtail-positions:/tmp
+    command: -config.file=/etc/promtail/config.yml
+    restart: unless-stopped
+    networks:
+      - logging
+
+volumes:
+  promtail-positions:
+
+networks:
+  logging:
+    driver: bridge

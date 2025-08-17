@@ -1,0 +1,149 @@
+{
+  "dashboard": {
+    "id": null,
+    "title": "MakerDAO Job Watcher",
+    "tags": ["makerdao", "jobs", "monitoring"],
+    "timezone": "browser",
+    "refresh": "30s",
+    "time": {
+      "from": "now-1h",
+      "to": "now"
+    },
+    "panels": [
+      {
+        "id": 1,
+        "title": "Job Scan Success Rate",
+        "type": "stat",
+        "targets": [
+          {
+            "refId": "A",
+            "region": "us-east-1",
+            "namespace": "MakerDAO/JobWatcher",
+            "metricName": "HealthCheck",
+            "statistics": ["Average"],
+            "period": 300
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "percent",
+            "min": 0,
+            "max": 100,
+            "thresholds": {
+              "steps": [
+                {"color": "red", "value": 0},
+                {"color": "yellow", "value": 95},
+                {"color": "green", "value": 99}
+              ]
+            }
+          }
+        },
+        "gridPos": {"h": 8, "w": 6, "x": 0, "y": 0}
+      },
+      {
+        "id": 2,
+        "title": "Stale Jobs Count",
+        "type": "graph",
+        "targets": [
+          {
+            "refId": "A",
+            "region": "us-east-1",
+            "namespace": "MakerDAO/JobWatcher",
+            "metricName": "JobsNotWorkedCount",
+            "statistics": ["Maximum"],
+            "period": 300
+          }
+        ],
+        "yAxes": [
+          {"min": 0},
+          {"show": false}
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 6, "y": 0}
+      },
+      {
+        "id": 3,
+        "title": "RPC Performance",
+        "type": "graph",
+        "targets": [
+          {
+            "refId": "A",
+            "region": "us-east-1",
+            "namespace": "MakerDAO/JobWatcher",
+            "metricName": "RpcCallsPerExecution",
+            "statistics": ["Average"],
+            "period": 300,
+            "alias": "RPC Calls"
+          },
+          {
+            "refId": "B",
+            "region": "us-east-1",
+            "namespace": "MakerDAO/JobWatcher",
+            "metricName": "ExecutionDuration",
+            "statistics": ["Average"],
+            "period": 300,
+            "alias": "Execution Time (ms)"
+          }
+        ],
+        "yAxes": [
+          {"min": 0},
+          {"show": false}
+        ],
+        "gridPos": {"h": 8, "w": 6, "x": 18, "y": 0}
+      },
+      {
+        "id": 4,
+        "title": "Recent Logs",
+        "type": "logs",
+        "targets": [
+          {
+            "refId": "A",
+            "region": "us-east-1",
+            "logGroups": ["/aws/lambda/maker-job-watcher-dev"],
+            "expression": "fields @timestamp, @message, context.executionId, context.totalJobs, performance.rpcCallsCount\n| filter @message like /Job scan/\n| sort @timestamp desc\n| limit 100"
+          }
+        ],
+        "gridPos": {"h": 12, "w": 24, "x": 0, "y": 8}
+      },
+      {
+        "id": 5,
+        "title": "Error Rate",
+        "type": "graph",
+        "targets": [
+          {
+            "refId": "A",
+            "region": "us-east-1",
+            "namespace": "MakerDAO/JobWatcher",
+            "metricName": "RpcFailures",
+            "statistics": ["Sum"],
+            "period": 300
+          }
+        ],
+        "yAxes": [
+          {"min": 0},
+          {"show": false}
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 20}
+      },
+      {
+        "id": 6,
+        "title": "Alert Activity",
+        "type": "graph",
+        "targets": [
+          {
+            "refId": "A",
+            "region": "us-east-1",
+            "namespace": "MakerDAO/JobWatcher",
+            "metricName": "AlertsSent",
+            "statistics": ["Sum"],
+            "period": 300
+          }
+        ],
+        "yAxes": [
+          {"min": 0},
+          {"show": false}
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 20}
+      }
+    ]
+  }
+}

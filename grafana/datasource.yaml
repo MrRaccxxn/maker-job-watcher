@@ -1,0 +1,31 @@
+# Grafana DataSource configuration for CloudWatch
+apiVersion: 1
+
+datasources:
+  - name: CloudWatch-MakerJobs
+    type: cloudwatch
+    access: proxy
+    jsonData:
+      authType: default  # Uses IAM role or credentials
+      defaultRegion: us-east-1
+      customMetricsNamespaces: MakerDAO/JobWatcher
+      logsTimeout: 300s
+    secureJsonData:
+      # If using access keys instead of IAM role:
+      # accessKey: YOUR_ACCESS_KEY
+      # secretKey: YOUR_SECRET_KEY
+
+  - name: CloudWatch-Logs
+    type: cloudwatch
+    access: proxy
+    jsonData:
+      authType: default
+      defaultRegion: us-east-1
+      logGroups:
+        - /aws/lambda/maker-job-watcher-dev
+        - /aws/lambda/maker-job-watcher-prod
+      logsTimeout: 300s
+    secureJsonData:
+      # If using access keys instead of IAM role:
+      # accessKey: YOUR_ACCESS_KEY  
+      # secretKey: YOUR_SECRET_KEY

@@ -1,0 +1,119 @@
+FROM node:18-alpine
+
+# Install dependencies for building
+RUN apk add --no-cache git
+
+# Set working directory
+WORKDIR /app
+
+# Copy package files
+COPY package*.json ./
+
+# Install dependencies
+RUN npm ci --only=production
+
+# Copy source code
+COPY . .
+
+# Build the application
+RUN npm run build
+
+# Expose port for HTTP handler testing
+EXPOSE 3000
+
+# Create a simple Express server for HTTP testing
+RUN npm install express @types/express
+
+# Create HTTP server script
+RUN cat > server.js << 'EOF'
+const express = require('express');
+const { httpHandler } = require('./dist/handler');
+
+const app = express();
+const port = process.env.PORT || 3000;
+
+app.use(express.json());
+
+// Health check endpoint
+app.get('/health', (req, res) => {
+  res.json({ status: 'healthy', timestamp: new Date().toISOString() });
+});
+
+// Lambda HTTP handler endpoint
+app.all('/monitor', async (req, res) => {
+  try {
+    // Convert Express request to API Gateway event format
+    const event = {
+      httpMethod: req.method,
+      path: req.path,
+      pathParameters: req.params,
+      queryStringParameters: req.query,
+      headers: req.headers,
+      multiValueHeaders: {},
+      body: req.body ? JSON.stringify(req.body) : null,
+      isBase64Encoded: false,
+      stageVariables: null,
+      requestContext: {
+        accountId: '123456789012',
+        apiId: 'local-api',
+        httpMethod: req.method,
+        path: req.path,
+        stage: 'local',
+        requestId: `local-${Date.now()}`,
+        requestTimeEpoch: Date.now(),
+        resourceId: 'local-resource',
+        resourcePath: req.path,
+        identity: {
+          sourceIp: req.ip,
+          userAgent: req.get('User-Agent'),
+        },
+        protocol: 'HTTP/1.1',
+        requestTime: new Date().toISOString(),
+      },
+      resource: req.path,
+      multiValueQueryStringParameters: null,
+    };
+
+    const context = {
+      callbackWaitsForEmptyEventLoop: false,
+      functionName: 'maker-job-watcher-local',
+      functionVersion: '1',
+      invokedFunctionArn: 'arn:aws:lambda:us-east-1:123456789012:function:maker-job-watcher-local',
+      memoryLimitInMB: '256',
+      awsRequestId: `local-${Date.now()}`,
+      logGroupName: '/aws/lambda/maker-job-watcher-local',
+      logStreamName: `local-stream-${Date.now()}`,
+      getRemainingTimeInMillis: () => 30000,
+    };
+
+    const result = await httpHandler(event, context);
+    
+    res.status(result.statusCode);
+    if (result.headers) {
+      Object.entries(result.headers).forEach(([key, value]) => {
+        res.set(key, value);
+      });
+    }
+    
+    res.send(result.body);
+  } catch (error) {
+    console.error('Handler error:', error);
+    res.status(500).json({ 
+      error: 'Internal server error', 
+      message: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+app.listen(port, '0.0.0.0', () => {
+  console.log(`🚀 MakerDAO Job Watcher local server running on port ${port}`);
+  console.log(`📊 Health check: http://localhost:${port}/health`);
+  console.log(`🔍 Monitor endpoint: http://localhost:${port}/monitor`);
+  console.log(`🧪 Test connectivity: http://localhost:${port}/monitor?test=true`);
+  console.log(`📈 Check status: http://localhost:${port}/monitor?status=true`);
+});
+EOF
+
+# Default command
+CMD ["node", "server.js"]

@@ -1,0 +1,61 @@
+version: '3.8'
+
+services:
+  # Loki - Log aggregation system
+  loki:
+    image: grafana/loki:latest
+    container_name: maker-job-watcher-loki
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./logging/loki-config.yml:/etc/loki/local-config.yaml:ro
+      - loki-data:/loki
+    command: -config.file=/etc/loki/local-config.yaml
+    networks:
+      - logging
+    restart: unless-stopped
+
+  # Grafana - Dashboard and visualization
+  grafana:
+    image: grafana/grafana:latest
+    container_name: maker-job-watcher-grafana
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./logging/grafana-provisioning:/etc/grafana/provisioning:ro
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_INSTALL_PLUGINS=grafana-clock-panel
+    networks:
+      - logging
+    restart: unless-stopped
+    depends_on:
+      - loki
+
+  # Promtail - Log shipping agent
+  promtail:
+    image: grafana/promtail:latest
+    container_name: maker-job-watcher-promtail-local
+    ports:
+      - "9081:9080"  # Different port to avoid conflict
+    volumes:
+      - ./logging/promtail-local.yml:/etc/promtail/config.yml:ro
+      - ./logs:/var/log/maker-job-watcher:ro
+      - promtail-local-positions:/tmp
+    command: -config.file=/etc/promtail/config.yml
+    networks:
+      - logging
+    restart: unless-stopped
+    depends_on:
+      - loki
+
+networks:
+  logging:
+    driver: bridge
+
+volumes:
+  loki-data:
+  grafana-data:
+  promtail-local-positions:
