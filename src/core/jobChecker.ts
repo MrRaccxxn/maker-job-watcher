@@ -3,8 +3,6 @@ import { JobStatus, BlockAnalysisResult, JobCheckResult } from '../types';
 import { RpcClient } from '../integrations/rpc';
 
 export class JobChecker {
-  private readonly WORK_METHOD_SIGNATURE = '0x48b3c4e2'; // work(bytes32,bytes) method signature
-  
   constructor(
     private readonly provider: ethers.JsonRpcProvider,
     private readonly rpcClient: RpcClient
@@ -49,25 +47,18 @@ export class JobChecker {
     jobAddresses: string[]
   ): Promise<BlockAnalysisResult> {
     try {
-      const block = await this.provider.getBlock(blockNumber, true);
-      if (!block) {
+      const blocks = await this.rpcClient.getBlockRange(blockNumber, blockNumber);
+      
+      if (blocks.length === 0) {
         throw new Error(`Block ${blockNumber} not found`);
       }
 
+      const block = blocks[0];
       const workedJobs = new Set<string>();
-      
-      for (const tx of block.transactions) {
-        if (typeof tx === 'string') continue;
-        
-        // Type assertion to handle ethers transaction type
-        const transaction = tx as ethers.TransactionResponse;
-        
-        // Check if transaction is to any of our job addresses
-        if (transaction.to && jobAddresses.includes(transaction.to.toLowerCase())) {
-          // Check if transaction calls the work method
-          if (transaction.data && this.isWorkTransaction(transaction.data)) {
-            workedJobs.add(transaction.to.toLowerCase());
-          }
+
+      for (const jobAddress of block.transactions) {
+        if (jobAddresses.some(addr => addr.toLowerCase() === jobAddress)) {
+          workedJobs.add(jobAddress);
         }
       }
 
@@ -191,11 +182,4 @@ export class JobChecker {
     };
   }
 
-  private isWorkTransaction(data: string): boolean {
-    if (!data || data.length < 10) return false;
-    
-    // Check if the transaction data starts with the work method selector
-    const methodSelector = data.slice(0, 10);
-    return methodSelector === this.WORK_METHOD_SIGNATURE;
-  }
 }

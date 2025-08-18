@@ -290,16 +290,26 @@ export class RpcClient {
             timestamp: string;
             transactions: Array<{
               to: string;
-              data: string;
+              data?: string;
+              input?: string;
             }>;
           };
+
+          // Filter for work() method calls to job addresses
+          // work() method signature is 0x1d2ab000 for work(bytes32,bytes)
+          const workedJobAddresses = block.transactions
+            .filter(tx => {
+              const txData = tx.input || tx.data;
+              return tx.to && 
+                     txData && 
+                     txData.toLowerCase().startsWith('0x1d2ab000');
+            })
+            .map(tx => tx.to.toLowerCase());
 
           blocks.push({
             number: parseInt(block.number, 16),
             timestamp: parseInt(block.timestamp, 16),
-            transactions: block.transactions
-              .filter(tx => tx.to && tx.data)
-              .map(tx => tx.to.toLowerCase()),
+            transactions: workedJobAddresses,
           });
         }
       }
