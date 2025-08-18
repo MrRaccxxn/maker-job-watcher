@@ -12,25 +12,19 @@
     "lint:fix": "eslint src/**/*.ts --fix",
     "clean": "rm -rf dist",
     "prebuild": "npm run clean",
-    
     "deploy": "serverless deploy --stage prod",
-    "deploy:dev": "serverless deploy --stage dev",
+    "deploy:dev": "export $(cat .env | grep -v '^#' | grep -v '^$' | grep '=' | sed 's/#.*//' | xargs) && serverless deploy --stage dev",
     "deploy:prod": "./scripts/deploy.sh prod",
     "deploy:test": "serverless deploy --stage test",
-    
     "undeploy": "serverless remove --stage prod",
-    "undeploy:dev": "serverless remove --stage dev",
-    
+    "undeploy:dev": "export $(cat .env | grep -v '^#' | grep -v '^$' | grep '=' | sed 's/#.*//' | xargs) && serverless remove --stage dev",
     "logs": "serverless logs --function jobWatcher --stage prod --tail",
     "logs:dev": "serverless logs --function jobWatcher --stage dev --tail",
-    
     "invoke": "serverless invoke --function jobWatcher --stage prod",
     "invoke:dev": "serverless invoke --function jobWatcher --stage dev",
     "invoke:test": "serverless invoke --function jobWatcher --stage prod --data '{\"test\": true}'",
-    
     "info": "serverless info --stage prod",
     "info:dev": "serverless info --stage dev",
-    
     "package": "npm run build && zip -r function.zip dist node_modules",
     "test:local": "ts-node scripts/test-local.ts",
     "start:local": "nodemon --exec ts-node scripts/test-local.ts",
@@ -53,6 +47,7 @@
     "jest": "^29.7.0",
     "nodemon": "^3.0.1",
     "serverless": "^3.38.0",
+    "serverless-dotenv-plugin": "^6.0.0",
     "serverless-plugin-typescript": "^2.1.5",
     "ts-jest": "^29.1.1",
     "ts-node": "^10.9.1",

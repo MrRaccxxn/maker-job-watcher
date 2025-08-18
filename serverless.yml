@@ -143,10 +143,15 @@ package:
   excludeDevDependencies: true
 
 # Required plugins
-plugins: []
+plugins:
+  - serverless-dotenv-plugin
 
 # Custom configuration
 custom:
+  # Environment variables
+  dotenv:
+    path: .env
+    
   # TypeScript compilation
   typescript:
     typescript:
