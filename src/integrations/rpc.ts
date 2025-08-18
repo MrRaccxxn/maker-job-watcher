@@ -1,37 +1,135 @@
 import { ethers } from 'ethers';
 import fetch from 'node-fetch';
+import { Agent } from 'https';
 import { RpcBatchRequest, RpcBatchResponse } from '../types';
 import { SEQUENCER_ABI } from '../abis/sequencer';
 import { IJOB_ABI } from '../abis/ijob';
 
+interface RpcConfig {
+  timeout: number;
+  maxRetries: number;
+  baseRetryDelay: number;
+  maxRetryDelay: number;
+  rateLimit: {
+    requestsPerSecond: number;
+    burstLimit: number;
+  };
+}
+
 export class RpcClient {
   private requestId = 0;
+  private readonly config: RpcConfig;
+  private readonly httpAgent: Agent;
+  private lastRequestTime = 0;
+
+  // TODO: Add support for multiple RPC provider URLs with automatic failover (Switch to other RPC providers if one fails)
 
   constructor(
     private readonly rpcUrl: string,
-    private readonly provider: ethers.JsonRpcProvider
-  ) {}
+    private readonly provider: ethers.JsonRpcProvider,
+    config?: Partial<RpcConfig>
+  ) {
+    this.config = {
+      timeout: 30000, // 30 seconds
+      maxRetries: 3,
+      baseRetryDelay: 1000, // 1 second
+      maxRetryDelay: 10000, // 10 seconds
+      rateLimit: {
+        requestsPerSecond: 10,
+        burstLimit: 20
+      },
+      ...config
+    };
+
+    // HTTP connection pooling for better performance
+    this.httpAgent = new Agent({
+      keepAlive: true,
+      maxSockets: 10,
+      maxFreeSockets: 5,
+      timeout: this.config.timeout,
+      keepAliveMsecs: 30000
+    });
+  }
+
+  private async sleep(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  private async waitForRateLimit(): Promise<void> {
+    const now = Date.now();
+    const timeSinceLastRequest = now - this.lastRequestTime;
+    const minInterval = 1000 / this.config.rateLimit.requestsPerSecond;
+
+    if (timeSinceLastRequest < minInterval) {
+      await this.sleep(minInterval - timeSinceLastRequest);
+    }
+
+    this.lastRequestTime = Date.now();
+  }
+
+  private async retryWithBackoff<T>(
+    operation: () => Promise<T>,
+    context: string
+  ): Promise<T> {
+    let lastError: Error;
+
+    for (let attempt = 0; attempt < this.config.maxRetries; attempt++) {
+      try {
+        await this.waitForRateLimit();
+        return await operation();
+      } catch (error: unknown) {
+        lastError = error as Error;
+        
+        if (attempt === this.config.maxRetries - 1) {
+          console.error(`${context} failed after ${this.config.maxRetries} attempts:`, lastError);
+          throw lastError;
+        }
+
+        const delay = Math.min(
+          this.config.baseRetryDelay * Math.pow(2, attempt),
+          this.config.maxRetryDelay
+        );
+        
+        console.warn(`${context} attempt ${attempt + 1} failed, retrying in ${delay}ms:`, lastError.message);
+        await this.sleep(delay);
+      }
+    }
+
+    throw lastError!;
+  }
 
   public async batchCall(requests: RpcBatchRequest[]): Promise<RpcBatchResponse[]> {
-    try {
-      const response = await fetch(this.rpcUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(requests),
-      });
+    return this.retryWithBackoff(async () => {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), this.config.timeout);
 
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+      try {
+        const response = await fetch(this.rpcUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(requests),
+          agent: this.httpAgent,
+          signal: controller.signal
+        });
+
+        clearTimeout(timeoutId);
+
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        const results = await response.json() as RpcBatchResponse[];
+        return Array.isArray(results) ? results : [results];
+      } catch (error) {
+        clearTimeout(timeoutId);
+        if ((error as Error).name === 'AbortError') {
+          throw new Error(`Request timeout after ${this.config.timeout}ms`);
+        }
+        throw error;
       }
-
-      const results = await response.json() as RpcBatchResponse[];
-      return Array.isArray(results) ? results : [results];
-    } catch (error) {
-      console.error('Batch RPC call failed:', error);
-      throw error;
-    }
+    }, 'Batch RPC call');
   }
 
   public async getJobAddresses(sequencerAddress: string): Promise<string[]> {
@@ -214,35 +312,47 @@ export class RpcClient {
   }
 
   public async getLatestBlockNumber(): Promise<number> {
-    try {
-      const response = await fetch(this.rpcUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          jsonrpc: '2.0',
-          method: 'eth_blockNumber',
-          params: [],
-          id: ++this.requestId,
-        }),
-      });
+    return this.retryWithBackoff(async () => {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), this.config.timeout);
 
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+      try {
+        const response = await fetch(this.rpcUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            method: 'eth_blockNumber',
+            params: [],
+            id: ++this.requestId,
+          }),
+          agent: this.httpAgent,
+          signal: controller.signal
+        });
+
+        clearTimeout(timeoutId);
+
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        const result = await response.json() as RpcBatchResponse;
+        
+        if (result.error) {
+          throw new Error(`RPC error: ${result.error.message}`);
+        }
+
+        return parseInt(result.result as string, 16);
+      } catch (error) {
+        clearTimeout(timeoutId);
+        if ((error as Error).name === 'AbortError') {
+          throw new Error(`Request timeout after ${this.config.timeout}ms`);
+        }
+        throw error;
       }
-
-      const result = await response.json() as RpcBatchResponse;
-      
-      if (result.error) {
-        throw new Error(`RPC error: ${result.error.message}`);
-      }
-
-      return parseInt(result.result as string, 16);
-    } catch (error) {
-      console.error('Error getting latest block number:', error);
-      throw error;
-    }
+    }, 'Get latest block number');
   }
 
   public async getLogs(
@@ -257,55 +367,71 @@ export class RpcClient {
     topics: string[];
     data: string;
   }>> {
-    try {
-      const response = await fetch(this.rpcUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          jsonrpc: '2.0',
-          method: 'eth_getLogs',
-          params: [
-            {
-              address,
-              fromBlock: `0x${fromBlock.toString(16)}`,
-              toBlock: `0x${toBlock.toString(16)}`,
-              topics,
-            },
-          ],
-          id: ++this.requestId,
-        }),
-      });
+    return this.retryWithBackoff(async () => {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), this.config.timeout);
 
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+      try {
+        const response = await fetch(this.rpcUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            method: 'eth_getLogs',
+            params: [
+              {
+                address,
+                fromBlock: `0x${fromBlock.toString(16)}`,
+                toBlock: `0x${toBlock.toString(16)}`,
+                topics,
+              },
+            ],
+            id: ++this.requestId,
+          }),
+          agent: this.httpAgent,
+          signal: controller.signal
+        });
+
+        clearTimeout(timeoutId);
+
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        const result = await response.json() as RpcBatchResponse;
+        
+        if (result.error) {
+          throw new Error(`RPC error: ${result.error.message}`);
+        }
+
+        const logs = result.result as Array<{
+          address: string;
+          blockNumber: string;
+          transactionHash: string;
+          topics: string[];
+          data: string;
+        }>;
+
+        return logs.map(log => ({
+          address: log.address,
+          blockNumber: parseInt(log.blockNumber, 16),
+          transactionHash: log.transactionHash,
+          topics: log.topics,
+          data: log.data,
+        }));
+      } catch (error) {
+        clearTimeout(timeoutId);
+        if ((error as Error).name === 'AbortError') {
+          throw new Error(`Request timeout after ${this.config.timeout}ms`);
+        }
+        throw error;
       }
+    }, 'Get logs');
+  }
 
-      const result = await response.json() as RpcBatchResponse;
-      
-      if (result.error) {
-        throw new Error(`RPC error: ${result.error.message}`);
-      }
-
-      const logs = result.result as Array<{
-        address: string;
-        blockNumber: string;
-        transactionHash: string;
-        topics: string[];
-        data: string;
-      }>;
-
-      return logs.map(log => ({
-        address: log.address,
-        blockNumber: parseInt(log.blockNumber, 16),
-        transactionHash: log.transactionHash,
-        topics: log.topics,
-        data: log.data,
-      }));
-    } catch (error) {
-      console.error('Error getting logs:', error);
-      throw error;
-    }
+  public cleanup(): void {
+    this.httpAgent.destroy();
   }
 }

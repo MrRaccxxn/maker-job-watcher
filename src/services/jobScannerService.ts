@@ -265,4 +265,8 @@ export class JobScannerService {
       currentBlock,
     };
   }
+
+  public cleanup(): void {
+    this.rpcClient.cleanup();
+  }
 }
