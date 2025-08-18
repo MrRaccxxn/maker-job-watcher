@@ -42,21 +42,16 @@ describe('JobChecker', () => {
       const blockNumber = 1000;
       const jobAddresses = ['0x1234567890123456789012345678901234567890'];
       
-      const mockBlock = {
-        timestamp: 1640995200,
-        transactions: [
-          {
-            to: '0x1234567890123456789012345678901234567890',
-            data: '0x1d2ab0000000000000000000000000000000000000000000000000000000000000000001',
-          },
-          {
-            to: '0x9876543210987654321098765432109876543210',
-            data: '0x1234567890',
-          },
-        ],
-      };
+      // Mock the RPC client response (our new implementation uses getBlockRange)
+      const mockBlockRange = [
+        {
+          number: 1000,
+          timestamp: 1640995200,
+          transactions: ['0x1234567890123456789012345678901234567890'], // Already filtered work transactions
+        }
+      ];
 
-      mockProvider.getBlock.mockResolvedValue(mockBlock as unknown as ethers.Block);
+      mockRpcClient.getBlockRange.mockResolvedValue(mockBlockRange);
 
       const result = await jobChecker.analyzeBlock(blockNumber, jobAddresses);
 
@@ -65,24 +60,23 @@ describe('JobChecker', () => {
         workedJobs: ['0x1234567890123456789012345678901234567890'],
         timestamp: 1640995200,
       });
-      expect(mockProvider.getBlock).toHaveBeenCalledWith(blockNumber, true);
+      expect(mockRpcClient.getBlockRange).toHaveBeenCalledWith(blockNumber, blockNumber);
     });
 
     it('should handle blocks with no job transactions', async () => {
       const blockNumber = 1001;
       const jobAddresses = ['0x1234567890123456789012345678901234567890'];
       
-      const mockBlock = {
-        timestamp: 1640995300,
-        transactions: [
-          {
-            to: '0x9876543210987654321098765432109876543210',
-            data: '0x1234567890',
-          },
-        ],
-      };
+      // Mock RPC response with no work transactions (empty transactions array)
+      const mockBlockRange = [
+        {
+          number: 1001,
+          timestamp: 1640995300,
+          transactions: [], // No work transactions found
+        }
+      ];
 
-      mockProvider.getBlock.mockResolvedValue(mockBlock as unknown as ethers.Block);
+      mockRpcClient.getBlockRange.mockResolvedValue(mockBlockRange);
 
       const result = await jobChecker.analyzeBlock(blockNumber, jobAddresses);
 
@@ -91,19 +85,22 @@ describe('JobChecker', () => {
         workedJobs: [],
         timestamp: 1640995300,
       });
+      expect(mockRpcClient.getBlockRange).toHaveBeenCalledWith(blockNumber, blockNumber);
     });
 
     it('should handle block not found error', async () => {
       const blockNumber = 1002;
       const jobAddresses = ['0x1234567890123456789012345678901234567890'];
 
-      mockProvider.getBlock.mockResolvedValue(null);
+      // Mock RPC client to return empty array (block not found)
+      mockRpcClient.getBlockRange.mockResolvedValue([]);
 
       const result = await jobChecker.analyzeBlock(blockNumber, jobAddresses);
 
       expect(result.blockNumber).toBe(blockNumber);
       expect(result.workedJobs).toEqual([]);
       expect(result.timestamp).toBeGreaterThan(0);
+      expect(mockRpcClient.getBlockRange).toHaveBeenCalledWith(blockNumber, blockNumber);
     });
   });
 
