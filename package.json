@@ -30,7 +30,8 @@
     "test:errors": "ts-node scripts/test-error-logs.ts",
     "test:handler-errors": "ts-node scripts/test-error-via-handler.ts",
     "start:local": "nodemon --exec ts-node scripts/test-local.ts",
-    "dev": "npm run build && node dist/scripts/test-local.js"
+    "dev": "npm run build && node dist/scripts/test-local.js",
+    "test:300-blocks": "ts-node scripts/test-300-blocks.ts"
   },
   "dependencies": {
     "@aws-sdk/client-cloudwatch": "^3.864.0",

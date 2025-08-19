@@ -1,4 +1,5 @@
 import { ethers } from 'ethers';
+import fetch from 'node-fetch';
 import { JobChecker } from '../core/jobChecker';
 import { RpcClient } from '../integrations/rpc';
 import { DiscordNotifier } from '../integrations/discord';
@@ -82,27 +83,79 @@ export class JobScannerService {
 
       console.log(`Found ${jobAddresses.length} jobs to monitor`);
 
-      // Step 2: Analyze recent blocks for job activity
-      console.log(`Analyzing last ${this.config.blocksToAnalyze} blocks...`);
-      const result = await this.performJobAnalysis(jobAddresses);
+      // Step 2: Check if ANY jobs were worked in recent blocks (using optimized RPC)
+      console.log(`Checking if any jobs were worked in last ${this.config.blocksToAnalyze} blocks (optimized)...`);
+      const workActivity = await this.jobChecker.checkIfAnyJobsWorkedOptimized(jobAddresses, this.config.blocksToAnalyze);
 
-      // Step 3: Publish job metrics
-      await this.publishJobMetrics(result);
+      // Step 3: Send Discord alert ONLY if NO jobs were worked (per requirement)
+      if (workActivity.totalWorkTransactions === 0) {
+        console.log(`🚨 NO jobs worked in last ${this.config.blocksToAnalyze} blocks - sending Discord alert`);
+        
+        // Create simple alert for no job activity
+        const noActivityAlert = {
+          embeds: [{
+            title: '🚨 MakerDAO Job Alert - No Activity Detected',
+            description: `No MakerDAO jobs have been executed in the last ${this.config.blocksToAnalyze} blocks.`,
+            color: 0xff0000, // Red
+            fields: [
+              {
+                name: '📊 Summary',
+                value: `0 work transactions found in ${this.config.blocksToAnalyze} blocks`,
+                inline: true,
+              },
+              {
+                name: '📦 Block Range',
+                value: `${workActivity.lastAnalyzedBlock - this.config.blocksToAnalyze + 1} to ${workActivity.lastAnalyzedBlock}`,
+                inline: true,
+              },
+              {
+                name: '🕐 Time Window',
+                value: `~${Math.round(this.config.blocksToAnalyze * 12 / 60)} minutes`,
+                inline: true,
+              },
+              {
+                name: '🎯 Jobs Monitored', 
+                value: `${jobAddresses.length} jobs`,
+                inline: true,
+              },
+              {
+                name: '🚀 RPC Method',
+                value: `${workActivity.method} (${workActivity.rpcCallsCount} calls)`,
+                inline: true,
+              }
+            ],
+            timestamp: new Date().toISOString(),
+          }],
+        };
 
-      // Step 4: Send Discord status update (always sent now)
-      console.log(`Sending Discord status update: ${result.staleJobs.length} stale jobs found out of ${result.totalJobs} total`);
-      const alertSuccess = await this.discordNotifier.sendAlert(result.staleJobs, result.totalJobs);
-      if (alertSuccess) {
-        alertsSent = 1;
-        console.log('Discord status update sent successfully');
+        try {
+          const response = await fetch(this.config.discordWebhookUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(noActivityAlert),
+          });
+
+          if (response.ok) {
+            alertsSent = 1;
+            console.log('Discord no-activity alert sent successfully');
+          } else {
+            console.error('Failed to send Discord no-activity alert');
+            rpcFailures++;
+          }
+        } catch (error) {
+          console.error('Error sending Discord no-activity alert:', error);
+          rpcFailures++;
+        }
       } else {
-        console.error('Failed to send Discord status update');
-        rpcFailures++;
+        console.log(`✅ Found ${workActivity.totalWorkTransactions} work transactions in last ${this.config.blocksToAnalyze} blocks - no alert needed`);
       }
+
+      // Step 4: Publish simplified metrics  
+      await this.publishSimplifiedMetrics(workActivity, jobAddresses.length);
 
       // Step 5: Publish execution metrics
       const metrics: MetricsData = {
-        jobsNotWorkedCount: result.staleJobs.length,
+        jobsNotWorkedCount: workActivity.totalWorkTransactions === 0 ? 1 : 0, // 1 if no activity, 0 if activity
         rpcFailures,
         alertsSent,
         executionDuration: Date.now() - startTime,
@@ -111,11 +164,16 @@ export class JobScannerService {
       await this.metricsPublisher.publishMetrics(metrics);
       await this.metricsPublisher.publishHealthCheck(true);
 
-      console.log(`Job scan completed successfully in ${metrics.executionDuration}ms`);
+      console.log(`Job scan completed successfully in ${Date.now() - startTime}ms`);
 
       return {
         success: true,
-        result,
+        result: {
+          totalJobs: jobAddresses.length,
+          staleJobs: [], // Not applicable with new logic
+          lastAnalyzedBlock: workActivity.lastAnalyzedBlock,
+          rpcCallsCount: workActivity.rpcCallsCount,
+        },
         metrics,
       };
 
@@ -160,44 +218,52 @@ export class JobScannerService {
     }
   }
 
-  private async performJobAnalysis(jobAddresses: string[]): Promise<JobCheckResult> {
-    console.log(`Analyzing last ${this.config.blocksToAnalyze} blocks...`);
-    
-    // Use the optimized JobChecker that performs batch operations
-    // This reduces RPC calls from ~18 to 3-4:
-    // 1. Get latest block number
-    // 2. Batch get all blocks 
-    // 3. Batch check workability (if needed)
-    return await this.jobChecker.performJobCheck(jobAddresses, this.config.blocksToAnalyze);
-  }
-
-  private async publishJobMetrics(result: JobCheckResult): Promise<void> {
+  private async publishSimplifiedMetrics(workActivity: any, totalJobs: number): Promise<void> {
     try {
-      const workableStaleJobs = result.staleJobs.filter(job => job.workable).length;
-      
-      await this.metricsPublisher.publishJobMetrics(
-        result.totalJobs,
-        workableStaleJobs,
-        result.staleJobs.length
+      // Publish metrics for the new simpler logic
+      await this.metricsPublisher.publishCustomMetric(
+        'TotalWorkTransactions',
+        workActivity.totalWorkTransactions,
+        'Count'
       );
 
-      // Publish additional metrics
+      await this.metricsPublisher.publishCustomMetric(
+        'TotalJobsMonitored',
+        totalJobs,
+        'Count'
+      );
+
       await this.metricsPublisher.publishCustomMetric(
         'LastAnalyzedBlock',
-        result.lastAnalyzedBlock,
+        workActivity.lastAnalyzedBlock,
         'Count'
       );
 
       await this.metricsPublisher.publishCustomMetric(
         'RpcCallsPerExecution',
-        result.rpcCallsCount,
+        workActivity.rpcCallsCount,
+        'Count'
+      );
+
+      // Key metric: 1 if no activity detected, 0 if activity detected
+      await this.metricsPublisher.publishCustomMetric(
+        'NoJobActivityDetected',
+        workActivity.totalWorkTransactions === 0 ? 1 : 0,
+        'Count'
+      );
+
+      // Track which RPC optimization method was used
+      await this.metricsPublisher.publishCustomMetric(
+        'RpcOptimizationMethod',
+        workActivity.method === 'eth_getLogs' ? 1 : 0, // 1 for optimized, 0 for fallback
         'Count'
       );
 
     } catch (error) {
-      console.error('Error publishing job metrics:', error);
+      console.error('Error publishing simplified metrics:', error);
     }
   }
+
 
   public async testConnectivity(): Promise<{
     rpcConnected: boolean;

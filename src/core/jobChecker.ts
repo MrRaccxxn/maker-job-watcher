@@ -130,6 +130,139 @@ export class JobChecker {
     }
   }
 
+  public async checkIfAnyJobsWorkedOptimized(
+    jobAddresses: string[],
+    blocksToAnalyze: number = 10
+  ): Promise<{
+    totalWorkTransactions: number;
+    lastAnalyzedBlock: number;
+    rpcCallsCount: number;
+    method: 'eth_getLogs' | 'getBlockRange' | 'chunked';
+  }> {
+    const latestBlockNumber = await this.provider.getBlockNumber();
+    const startBlock = latestBlockNumber - blocksToAnalyze + 1;
+    const endBlock = latestBlockNumber;
+
+    console.log(`Checking if any jobs worked in blocks ${startBlock} to ${endBlock}...`);
+
+    let rpcCallsUsed = 1; // For getBlockNumber()
+    let method: 'eth_getLogs' | 'getBlockRange' | 'chunked';
+    let blocks: Array<{ number: number; timestamp: number; transactions: string[] }>;
+
+    try {
+      // Choose optimal method based on block range size
+      if (blocksToAnalyze <= 500) {
+        // Use eth_getLogs for small ranges (most efficient)
+        console.log(`Using eth_getLogs optimization for ${blocksToAnalyze} blocks`);
+        method = 'eth_getLogs';
+        blocks = await this.rpcClient.getWorkTransactionsByLogs(jobAddresses, startBlock, endBlock);
+        rpcCallsUsed += 1; // eth_getLogs call + transaction verification calls
+        // Add transaction verification RPC calls (approximate)
+        rpcCallsUsed += Math.min(blocks.length * 2, 50); // Max 50 additional calls for tx verification
+      } else if (blocksToAnalyze <= 1000) {
+        // Use original method for medium ranges
+        console.log(`Using getBlockRange method for ${blocksToAnalyze} blocks`);
+        method = 'getBlockRange';
+        blocks = await this.rpcClient.getBlockRange(startBlock, endBlock);
+        rpcCallsUsed += 1; // Single batch call
+      } else {
+        // Use chunked approach for large ranges
+        console.log(`Using chunked approach for ${blocksToAnalyze} blocks`);
+        method = 'chunked';
+        const chunkSize = 500;
+        blocks = [];
+        
+        for (let start = startBlock; start <= endBlock; start += chunkSize) {
+          const chunkEnd = Math.min(start + chunkSize - 1, endBlock);
+          const chunkBlocks = await this.rpcClient.getWorkTransactionsByLogs(jobAddresses, start, chunkEnd);
+          blocks.push(...chunkBlocks);
+          rpcCallsUsed += 1;
+          
+          // Add delay between chunks to respect rate limits
+          if (start + chunkSize <= endBlock) {
+            await new Promise(resolve => setTimeout(resolve, 1000));
+          }
+        }
+      }
+
+      // Count total work transactions across all blocks
+      const totalWorkTransactions = blocks.reduce((sum, block) => sum + block.transactions.length, 0);
+
+      return {
+        totalWorkTransactions,
+        lastAnalyzedBlock: endBlock,
+        rpcCallsCount: rpcCallsUsed,
+        method
+      };
+
+    } catch (error) {
+      console.error('Error in optimized job check:', error);
+      
+      // Fallback to original method
+      console.log('Falling back to original getBlockRange method...');
+      const fallbackBlocks = await this.rpcClient.getBlockRange(startBlock, endBlock);
+      const totalWorkTransactions = fallbackBlocks.reduce((sum, block) => sum + block.transactions.length, 0);
+      
+      return {
+        totalWorkTransactions,
+        lastAnalyzedBlock: endBlock,
+        rpcCallsCount: rpcCallsUsed + 1,
+        method: 'getBlockRange'
+      };
+    }
+  }
+
+  public async checkIfAnyJobsWorked(
+    jobAddresses: string[],
+    blocksToAnalyze: number = 10
+  ): Promise<{
+    totalWorkTransactions: number;
+    lastAnalyzedBlock: number;
+    rpcCallsCount: number;
+  }> {
+    let rpcCallsCount = 0;
+
+    try {
+      // Get the latest block number
+      const latestBlock = await this.provider.getBlockNumber();
+      rpcCallsCount++;
+
+      const startBlock = latestBlock - blocksToAnalyze + 1;
+      const endBlock = latestBlock;
+
+      console.log(`Checking if any jobs worked in blocks ${startBlock} to ${endBlock}...`);
+
+      // Get all blocks in the range and count work transactions
+      const blocks = await this.rpcClient.getBlockRange(startBlock, endBlock);
+      rpcCallsCount++;
+
+      let totalWorkTransactions = 0;
+
+      for (const block of blocks) {
+        const workedJobs = block.transactions
+          .filter((tx: any) => {
+            const txData = tx.input || tx.data;
+            return tx.to && txData && txData.toLowerCase().startsWith('0x1d2ab000');
+          })
+          .map((tx: any) => tx.to!.toLowerCase())
+          .filter((address: string) => jobAddresses.some(job => job.toLowerCase() === address));
+
+        totalWorkTransactions += workedJobs.length;
+      }
+
+      console.log(`Found ${totalWorkTransactions} work transactions in ${blocksToAnalyze} blocks`);
+
+      return {
+        totalWorkTransactions,
+        lastAnalyzedBlock: latestBlock,
+        rpcCallsCount,
+      };
+    } catch (error) {
+      console.error('Error checking job work activity:', error);
+      throw error;
+    }
+  }
+
   public async performJobCheck(
     jobAddresses: string[],
     blocksToAnalyze: number = 10

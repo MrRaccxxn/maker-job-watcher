@@ -254,6 +254,88 @@ export class RpcClient {
     }
   }
 
+  /**
+   * Get work transactions using eth_getLogs (most efficient for small ranges)
+   */
+  public async getWorkTransactionsByLogs(
+    jobAddresses: string[],
+    fromBlock: number,
+    toBlock: number
+  ): Promise<Array<{
+    number: number;
+    timestamp: number;
+    transactions: string[];
+  }>> {
+    const maxBlockRange = 500; // RPC provider limit
+    const blockRange = toBlock - fromBlock + 1;
+    
+    if (blockRange > maxBlockRange) {
+      throw new Error(`Block range ${blockRange} exceeds maximum ${maxBlockRange} for eth_getLogs`);
+    }
+
+    console.log(`Using eth_getLogs for ${blockRange} blocks (${fromBlock} to ${toBlock})...`);
+
+    try {
+      // Get logs from all job addresses in one call
+      const logs = await this.provider.getLogs({
+        address: jobAddresses,
+        fromBlock: fromBlock,
+        toBlock: toBlock,
+        // No topics filter - get all events from job contracts
+      });
+
+      console.log(`Found ${logs.length} events from job contracts`);
+
+      // Group by block number and filter for actual work events
+      const blockMap = new Map<number, Set<string>>();
+      const verifiedTransactions = new Set<string>();
+
+      // First pass: collect unique transaction hashes for verification
+      const txHashes = [...new Set(logs.map(log => log.transactionHash))];
+      
+      // Batch verify transactions are work() calls
+      for (const txHash of txHashes) {
+        const tx = await this.provider.getTransaction(txHash);
+        if (tx && tx.data.toLowerCase().startsWith('0x1d2ab000')) {
+          verifiedTransactions.add(txHash);
+        }
+      }
+
+      // Second pass: group verified work transactions by block
+      for (const log of logs) {
+        if (verifiedTransactions.has(log.transactionHash)) {
+          const blockNumber = log.blockNumber;
+          if (!blockMap.has(blockNumber)) {
+            blockMap.set(blockNumber, new Set());
+          }
+          blockMap.get(blockNumber)!.add(log.address.toLowerCase());
+        }
+      }
+
+      // Convert to expected format
+      const results: Array<{
+        number: number;
+        timestamp: number;
+        transactions: string[];
+      }> = [];
+      
+      for (const [blockNumber, addresses] of blockMap.entries()) {
+        results.push({
+          number: blockNumber,
+          timestamp: 0, // Not needed for current use case
+          transactions: Array.from(addresses)
+        });
+      }
+
+      console.log(`Detected ${results.length} blocks with work transactions using eth_getLogs`);
+      return results;
+
+    } catch (error) {
+      console.error('eth_getLogs failed:', error);
+      throw error;
+    }
+  }
+
   public async getBlockRange(startBlock: number, endBlock: number): Promise<Array<{
     number: number;
     timestamp: number;
